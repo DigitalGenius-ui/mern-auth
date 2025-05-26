@@ -1,5 +1,6 @@
 import { CookieOptions, Response } from "express";
 import { fifteenMinutesFromNow, thirtyDaysFromNow } from "./Date";
+import { NODE_ENV } from "../constants/env";
 
 type SetAccessTokenType = {
   res: Response;
@@ -9,22 +10,22 @@ type SetAccessTokenType = {
 
 const defaults: CookieOptions = {
   httpOnly: true,
-  secure: process.env.NODE_ENV !== "development",
+  secure: NODE_ENV !== "development",
   sameSite: "strict",
 };
 
-const getAccessTokenCookieOptions = (): CookieOptions => ({
+export const getAccessTokenCookieOptions = (): CookieOptions => ({
   ...defaults,
   expires: fifteenMinutesFromNow(),
 });
 
-const refreshTokenPath = "/auth/refreshToken";
+export const REFRESH_PATH = "/auth/refresh";
 
-const getRefreshTokenCookieOptions = (): CookieOptions => ({
+export const getRefreshTokenCookieOptions = (): CookieOptions => ({
   ...defaults,
   expires: thirtyDaysFromNow(),
   // we want this cookie to be available only in refresh token route.
-  path: refreshTokenPath,
+  path: REFRESH_PATH,
 });
 
 export const setAccessToken = ({
@@ -41,5 +42,5 @@ export const setAccessToken = ({
 export const setClearCookies = (res: Response) => {
   return res
     .clearCookie("accessToken")
-    .clearCookie("refreshToken", { path: refreshTokenPath });
+    .clearCookie("refreshToken", { path: REFRESH_PATH });
 };

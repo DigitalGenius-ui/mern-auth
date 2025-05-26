@@ -45,6 +45,10 @@ export const SessionCodeModel = db.define(
     userAgent: {
       type: DataTypes.STRING,
     },
+    expiresAt: {
+      type: DataTypes.DATE,
+      allowNull: false,
+    },
   },
   { timestamps: true }
 );

@@ -1,15 +1,28 @@
 import catchError from "../utils/catchError";
 import { CREATED, OK, UNAUTHORIZED } from "../constants/http";
 import {
+  emailSchema,
   loginValidSchemas,
   registerValidSchemas,
+  resetPasswordValidSchemas,
 } from "../Schemas/AuthSchemas";
-import { createAccount, loginUser } from "../services/auth-services";
-import { setAccessToken, setClearCookies } from "../utils/cookies";
+import {
+  createAccount,
+  forgotPassword,
+  loginUser,
+  refreshUserAccessToken,
+  resetPassword,
+  verifyUserEmail,
+} from "../services/auth-services";
+import {
+  getAccessTokenCookieOptions,
+  getRefreshTokenCookieOptions,
+  setAccessToken,
+  setClearCookies,
+} from "../utils/cookies";
 import { verifyToken } from "../utils/JWTToken";
 import { SessionCodeModel } from "../Model/AuthModels";
 import appAssert from "../utils/AppAssert";
-import { JWT_ACCESS_SECRET } from "../constants/env";
 
 export const registerHandler = catchError(async (req, res) => {
   const request = registerValidSchemas.parse({
@@ -37,10 +50,10 @@ export const loginHanlder = catchError(async (req, res) => {
 });
 
 export const logOutHanlder = catchError(async (req, res) => {
-  const accessToken = req.cookies.accessToken;
-  appAssert(accessToken, UNAUTHORIZED, "Token is not provided!");
+  const accessToken = req.cookies.accessToken as string | undefined;
+  appAssert(accessToken, UNAUTHORIZED, "accessToken is not provided!");
 
-  const decoded = verifyToken(accessToken);
+  const decoded = verifyToken(accessToken, "accessToken");
   appAssert(
     !("error" in decoded),
     UNAUTHORIZED,
@@ -52,4 +65,50 @@ export const logOutHanlder = catchError(async (req, res) => {
   return setClearCookies(res)
     .status(OK)
     .json({ message: "User has been loggedout successfully!" });
+});
+
+export const refreshHanlder = catchError(async (req, res) => {
+  const refreshToken = req.cookies.refreshToken as string | undefined;
+  appAssert(refreshToken, UNAUTHORIZED, "refreshToken is not provided!");
+
+  const { accessToken, newRefreshToken } = await refreshUserAccessToken(
+    refreshToken
+  );
+
+  if (newRefreshToken) {
+    res.cookie("refreshToken", newRefreshToken, getRefreshTokenCookieOptions());
+  }
+
+  return res
+    .status(OK)
+    .cookie("accessToken", accessToken, getAccessTokenCookieOptions())
+    .json({ message: "Access token refreshed!" });
+});
+
+export const verifyEmailHandler = catchError(async (req, res) => {
+  const verifyCode = req.params.code as string | undefined;
+  appAssert(verifyCode, UNAUTHORIZED, "Verify code is not provided!");
+
+  const { user } = await verifyUserEmail(verifyCode);
+  return res.status(OK).json({ message: user });
+});
+
+export const forgotPasswordHandler = catchError(async (req, res) => {
+  const email = emailSchema.parse(req.body.email);
+  appAssert(email, UNAUTHORIZED, "Email is not provided!");
+
+  const { url, emailId } = await forgotPassword(email);
+
+  return res.status(OK).json({ url, emailId });
+});
+
+export const resetPasswordHandler = catchError(async (req, res) => {
+  const request = resetPasswordValidSchemas.parse(req.body);
+  const { verificationCode, password } = request;
+
+  await resetPassword({ verificationCode, password });
+
+  return setClearCookies(res)
+    .status(OK)
+    .json({ message: "Password reset successfully!" });
 });

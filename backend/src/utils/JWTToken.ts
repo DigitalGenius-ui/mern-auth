@@ -33,11 +33,18 @@ export const generateToken = ({ payload, type }: Params) => {
 };
 
 // verify token
-export const verifyToken = <TOptions extends accessType>(token: string) => {
+type verifiTokenType = "accessToken" | "refreshToken";
+
+export const verifyToken = <T extends accessType>(
+  token: string,
+  type: verifiTokenType
+) => {
+  const secret =
+    type === "accessToken" ? JWT_ACCESS_SECRET : JWT_REFRESH_SECRET;
   try {
-    const payload = jwt.verify(token, JWT_ACCESS_SECRET, {
+    const payload = jwt.verify(token, secret, {
       ...options,
-    }) as TOptions;
+    }) as T;
     return payload;
   } catch (error: any) {
     console.log(error);

@@ -1,21 +1,40 @@
 import { z } from "zod";
-import { JWT_ACCESS_SECRET, JWT_REFRESH_SECRET } from "../constants/env";
-import { CONFLICT, UNAUTHORIZED } from "../constants/http";
+import {
+  CONFLICT,
+  INTERNAL_SERVER_ERROR,
+  NOT_FOUND,
+  TOO_MANY_REQUESTS,
+  UNAUTHORIZED,
+} from "../constants/http";
 import VerificationCodeType from "../constants/VerificationCode";
 import appAssert from "../utils/AppAssert";
 import { checkPasswords, encryptPassword } from "../utils/BcryptJS";
-import { oneYearFromNow } from "../utils/Date";
-import jwt from "jsonwebtoken";
 import {
+  fiveMinutesAgo,
+  ON_DAY_MS,
+  oneHoureFromNow,
+  oneYearFromNow,
+  thirtyDaysFromNow,
+} from "../utils/Date";
+import {
+  verificationCodeSchema,
   loginValidSchemas,
   registerValidSchemas,
+  resetPasswordValidSchemas,
 } from "../Schemas/AuthSchemas";
 import {
   SessionCodeModel,
   UserModel,
   VerificationCodeModel,
 } from "../Model/AuthModels";
-import { generateToken } from "../utils/JWTToken";
+import { generateToken, verifyToken } from "../utils/JWTToken";
+import { Op } from "sequelize";
+import { sendEmail } from "../utils/sendEmail";
+import { FRONTEND_URL } from "../constants/env";
+import {
+  getPasswordResetTemplate,
+  getVerifyEmailTemplate,
+} from "../utils/emailTemplate";
 
 type regRequestType = z.infer<typeof registerValidSchemas>;
 
@@ -44,10 +63,22 @@ export const createAccount = async (request: regRequestType) => {
     expiresAt: oneYearFromNow(),
   });
 
+  // send verfity email
+  const url = `${FRONTEND_URL}/email/verify/${verificationCode.dataValues.id}`;
+  const { error } = await sendEmail({
+    to: user.dataValues.email,
+    ...getVerifyEmailTemplate(url),
+  });
+
+  if (error) {
+    console.log(error);
+  }
+
   // create session
   const session = await SessionCodeModel.create({
     userId: user.dataValues.id,
     userAgent: request.userAgent,
+    expiresAt: thirtyDaysFromNow(),
   });
 
   // create refresh token
@@ -77,18 +108,19 @@ export const loginUser = async (request: logRequestType) => {
     where: { email: request.email },
   });
   // valid user is exist
-  appAssert(userExists, UNAUTHORIZED, "User is not exists!");
+  appAssert(userExists, NOT_FOUND, "User is not exists!");
 
   const { id: userId, password } = userExists?.dataValues;
 
   // valid password of the user
   const isPasswordValid = await checkPasswords(request.password, password);
-  appAssert(isPasswordValid, UNAUTHORIZED, "Passwords are not matching!");
+  appAssert(isPasswordValid, CONFLICT, "Invalid email or password!");
 
   // create session
   const session = await SessionCodeModel.create({
     userId: userId,
     userAgent: request.userAgent,
+    expiresAt: thirtyDaysFromNow(),
   });
 
   // create refresh token
@@ -112,5 +144,165 @@ export const loginUser = async (request: logRequestType) => {
     accessToken,
     refreshToken,
     user: userData,
+  };
+};
+
+export const refreshUserAccessToken = async (refreshToken: string) => {
+  const payload = verifyToken(refreshToken, "refreshToken");
+  appAssert(!("error" in payload), UNAUTHORIZED, "Invalid refreshToken!");
+
+  const session = await SessionCodeModel.findOne({
+    where: { id: payload.sessionId },
+  });
+
+  const sessionExpireAt = session?.dataValues.expiresAt;
+  const now = Date.now();
+
+  appAssert(
+    session && sessionExpireAt.getTime() > now,
+    UNAUTHORIZED,
+    "Session is expired!"
+  );
+
+  // refresh the session if it expires in 24 hours
+  const isSessionExpiringSoon = sessionExpireAt.getTime() - now <= ON_DAY_MS();
+  if (isSessionExpiringSoon) {
+    await session.update({
+      expiresAt: thirtyDaysFromNow(),
+    });
+  }
+
+  // regenrate refresh and accesstokens
+
+  const newRefreshToken = isSessionExpiringSoon
+    ? generateToken({
+        payload: { sessionId: session.dataValues.id },
+        type: "refreshToken",
+      })
+    : undefined;
+
+  const accessToken = generateToken({
+    payload: {
+      user_id: session.dataValues.userId,
+      sessionId: session.dataValues.id,
+    },
+    type: "accessToken",
+  });
+
+  return {
+    accessToken,
+    newRefreshToken,
+  };
+};
+
+export const verifyUserEmail = async (
+  verificationCode: z.infer<typeof verificationCodeSchema>
+) => {
+  // get verification code
+  const getCode = await VerificationCodeModel.findOne({
+    where: { id: verificationCode },
+  });
+  appAssert(getCode, UNAUTHORIZED, "Verification code is not valid!");
+  // get user by id
+  const user = await UserModel.findOne({
+    where: { id: getCode.dataValues.userId },
+  });
+  appAssert(user, UNAUTHORIZED, "User is not exists!");
+  // updater user verified to true
+  const updateUser = await user.update({ verified: true });
+  appAssert(updateUser, INTERNAL_SERVER_ERROR, "Failed to verify user!");
+  // delete verification code
+  await VerificationCodeModel.destroy({ where: { id: verificationCode } });
+  // return user data
+  const { password, ...userData } = user.dataValues;
+  return { user: userData };
+};
+
+export const forgotPassword = async (email: string) => {
+  const user = await UserModel.findOne({
+    where: { email },
+  });
+
+  appAssert(user, NOT_FOUND, "User is not exists!");
+
+  // check email rate limit
+  const requestCount = await VerificationCodeModel.count({
+    where: {
+      userId: user.dataValues.id,
+      type: VerificationCodeType.PasswordReset,
+      createdAt: {
+        [Op.gte]: fiveMinutesAgo(),
+      },
+    },
+  });
+
+  appAssert(
+    requestCount <= 1,
+    TOO_MANY_REQUESTS,
+    "Too many requests! Please try again later."
+  );
+
+  // create verification code for password reset
+  const expiresAt = oneHoureFromNow();
+  const verificationCode = await VerificationCodeModel.create({
+    userId: user.dataValues.id,
+    type: VerificationCodeType.PasswordReset,
+    expiresAt,
+  });
+
+  // send email with verification code
+  const url = `${FRONTEND_URL}/password/reset?code=${
+    verificationCode.dataValues.id
+  }&exp=${expiresAt.getTime()}`;
+
+  const { data, error } = await sendEmail({
+    to: user.dataValues.email,
+    ...getPasswordResetTemplate(url),
+  });
+
+  appAssert(
+    data?.id,
+    INTERNAL_SERVER_ERROR,
+    `${error?.name} - ${error?.message}`
+  );
+
+  // return success message
+  return {
+    url,
+    emailId: data?.id,
+  };
+};
+
+type resetPasswordRequestType = z.infer<typeof resetPasswordValidSchemas>;
+export const resetPassword = async ({
+  verificationCode,
+  password,
+}: resetPasswordRequestType) => {
+  // get verification code
+  const code = await VerificationCodeModel.findOne({
+    where: { id: verificationCode },
+  });
+  appAssert(code, CONFLICT, "Verification code is not valid!");
+  // change the password
+  const user = await UserModel.findOne({
+    where: { id: code.dataValues.userId },
+  });
+  appAssert(user, NOT_FOUND, "User is not exists!");
+
+  const updatePassword = await user.update({
+    password: await encryptPassword(password),
+  });
+  appAssert(
+    updatePassword,
+    INTERNAL_SERVER_ERROR,
+    "Failed to update password!"
+  );
+  // delete the verification code
+  await VerificationCodeModel.destroy({ where: { id: verificationCode } });
+  // delete all sessions
+  await SessionCodeModel.destroy({ where: { userId: user.dataValues.id } });
+  // return success message
+  return {
+    message: "Password has been reset successfully! Please login again.",
   };
 };
