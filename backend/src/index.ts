@@ -7,6 +7,7 @@ import errorHandler from "./middleware/errorHandler";
 import authRoute from "./routes/auth-route";
 import userRoute from "./routes/user-route";
 import { authMiddleware } from "./middleware/authMiddleware";
+import sessionRoute from "./routes/session-route";
 
 const app = express();
 
@@ -22,6 +23,7 @@ app.use("/auth", authRoute);
 
 //protected routes
 app.use("/user", authMiddleware, userRoute);
+app.use("/session", authMiddleware, sessionRoute);
 
 // error handler
 app.use(errorHandler);

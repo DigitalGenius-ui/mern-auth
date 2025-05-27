@@ -2,8 +2,10 @@ import { NOT_FOUND } from "../constants/http";
 import { UserModel } from "../Model/AuthModels";
 import appAssert from "../utils/AppAssert";
 
-export const getAllUsers = async () => {
-  const allUsers = await UserModel.findAll();
-  appAssert(allUsers.length > 0, NOT_FOUND, "No users found");
-  return allUsers;
+export const getUserById = async (userId: string) => {
+  const user = await UserModel.findOne({ where: { id: userId } });
+  appAssert(user, NOT_FOUND, "User not found");
+
+  const { password, ...userWithoutPassword } = user.toJSON();
+  return userWithoutPassword;
 };

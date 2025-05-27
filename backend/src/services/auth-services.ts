@@ -148,11 +148,11 @@ export const loginUser = async (request: logRequestType) => {
 };
 
 export const refreshUserAccessToken = async (refreshToken: string) => {
-  const payload = verifyToken(refreshToken, "refreshToken");
-  appAssert(!("error" in payload), UNAUTHORIZED, "Invalid refreshToken!");
+  const { payload, error } = verifyToken(refreshToken, "refreshToken");
+  appAssert(!error, UNAUTHORIZED, "Invalid refreshToken!");
 
   const session = await SessionCodeModel.findOne({
-    where: { id: payload.sessionId },
+    where: { id: payload?.sessionId },
   });
 
   const sessionExpireAt = session?.dataValues.expiresAt;

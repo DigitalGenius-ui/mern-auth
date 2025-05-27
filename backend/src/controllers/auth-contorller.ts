@@ -53,14 +53,10 @@ export const logOutHanlder = catchError(async (req, res) => {
   const accessToken = req.cookies.accessToken as string | undefined;
   appAssert(accessToken, UNAUTHORIZED, "accessToken is not provided!");
 
-  const decoded = verifyToken(accessToken, "accessToken");
-  appAssert(
-    !("error" in decoded),
-    UNAUTHORIZED,
-    "Something went wrong with decoded!"
-  );
+  const { payload, error } = verifyToken(accessToken, "accessToken");
+  appAssert(!error, UNAUTHORIZED, "Invalid access token!");
 
-  await SessionCodeModel.destroy({ where: { id: decoded.sessionId } });
+  await SessionCodeModel.destroy({ where: { id: payload?.sessionId } });
 
   return setClearCookies(res)
     .status(OK)

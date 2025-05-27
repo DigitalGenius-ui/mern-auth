@@ -2,7 +2,7 @@ import jwt from "jsonwebtoken";
 import { JWT_ACCESS_SECRET, JWT_REFRESH_SECRET } from "../constants/env";
 import { DataTypes } from "sequelize";
 
-type accessType = {
+export type accessType = {
   user_id: typeof DataTypes.UUID;
   sessionId: typeof DataTypes.UUID;
 };
@@ -35,7 +35,9 @@ export const generateToken = ({ payload, type }: Params) => {
 // verify token
 type verifiTokenType = "accessToken" | "refreshToken";
 
-export const verifyToken = <T extends accessType>(
+export const verifyToken = <
+  T extends accessType & { error: string | undefined }
+>(
   token: string,
   type: verifiTokenType
 ) => {
@@ -45,11 +47,10 @@ export const verifyToken = <T extends accessType>(
     const payload = jwt.verify(token, secret, {
       ...options,
     }) as T;
-    return payload;
+    return { payload };
   } catch (error: any) {
-    console.log(error);
     return {
-      error: error.errors[0].message,
+      error: error.message || "Token verification failed",
     };
   }
 };
